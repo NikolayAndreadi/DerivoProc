@@ -1,10 +1,13 @@
 import numpy as np
 import scipy as sp
-
 from scipy import integrate
 from scipy.optimize import minimize_scalar
+from scipy.stats import linregress
 
 np.warnings.filterwarnings("ignore")
+
+SUGGEST_COUNT = 3
+R = 8.3144598
 
 # List of mechanisms
 G = [[lambda a: a ** (1 / 4), "a^(1/4)"],
@@ -30,7 +33,14 @@ G = [[lambda a: a ** (1 / 4), "a^(1/4)"],
      [lambda a: 1 - (1 - a) ** 4, "1-(1-a)^4"],
      ]
 
-R = 8.3144598
+
+def g_as_str(algorithm_number):
+    """
+    Prints G(alpha) as string
+    :param algorithm_number: alg number
+    :return: string
+    """
+    return G[algorithm_number][1]
 
 
 def calc_x_vec(temp_vec, act_energy):
@@ -52,7 +62,7 @@ def calc_p(temp_vec, act_energy):
     Calculates p(x) value
     :param temp_vec: np.array of temperature
     :param act_energy:  activation energy
-    :return: np.array of p(x) or p(T, Eact) values
+    :return: np.array of p(x) or p(T, E_act) values
     """
     x = calc_x_vec(temp_vec, act_energy)
     p = []
@@ -91,17 +101,49 @@ def calc_delta(act_energy, t_vec, f_vec):
     :return: delta value
     """
     p_vec = calc_p(t_vec, act_energy)
-    B = calc_b(f_vec, p_vec)
-    return np.std(B)
+    b = calc_b(f_vec, p_vec)
+    return np.std(b)
 
 
-def g_as_str(algorithm_number):
+def calc_init_energy(t_vec, alpha_vec):
     """
-    Prints G(alpha) as string
-    :param algorithm_number: alg number
-    :return: string
+    Estimates initial activation energy
+    :param t_vec: temperature vector
+    :param alpha_vec: alpha vector
+    :return: value of E_act
     """
-    return G[algorithm_number][1]
+    x = 1 / t_vec
+    y = np.log(alpha_vec / (T ** 2))
+
+    dy = np.diff(y) / np.diff(x)
+    target = (np.abs(dy - np.average(dy))).argmin()
+    return linregress(x[:target], y[:target])[0] * (-R)
+
+
+def find_best_alg(act_energy, temp_array, alpha_array):
+    """
+    Finds several algorithms with best delta
+    :param act_energy: activation energy
+    :param temp_array: temperature array
+    :param alpha_array: alpha array
+    :return: [algorithm_numbers]
+    """
+    summary = np.array([])
+    for alg_n in range(len(G)):
+        f = calc_f(alg_n, alpha_array)
+        summary = np.append(summary, calc_delta(act_energy, temp_array, f))
+    return np.argsort(summary)[:SUGGEST_COUNT]
+
+
+def optimize_energy(temp_arr, f_arr):
+    """
+    Final optimization of activation energy
+    :param temp_arr: temperature array
+    :param f_arr: f-array
+    :return: [optimized energy, delta]
+    """
+    opt = minimize_scalar(calc_delta, args=(temp_arr, f_arr,))
+    return [opt.x, opt.fun]
 
 
 def extract_data(filename):
@@ -111,20 +153,23 @@ def extract_data(filename):
     :param filename: name of .csv file
     :return: np.array, 1st col - T, 2nd col - alpha
     """
-
     data = np.genfromtxt(filename, delimiter=";", skip_header=1)
     return data
 
 
-content = extract_data("UN-1a.csv")
+"""
+MAIN
+"""
+content = extract_data("UPd3_653-837K.csv")
 T = content[:, 0]
 a = content[:, 1]
 
-for alg_n in range(len(G)):
-    print("Work with ", g_as_str(alg_n))
-    F = calc_f(alg_n, a)
-    #opt = minimize_scalar(calc_delta, args=(T, F,),
-    #                      method="brent", bracket=(160,220))
-    print(calc_delta(166000, T, F))
-    #print(opt.x, opt.fun)
+E = calc_init_energy(T, a)
+best = find_best_alg(E, T, a)
+print("Algo\tEact\tdelta")
+for i in best:
+    F = calc_f(i, a)
+    res = optimize_energy(T, F)
+    print(g_as_str(i), '\t', res[0], '\t', res[1])
 
+# End of script
