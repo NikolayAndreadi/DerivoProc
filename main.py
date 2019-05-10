@@ -1,3 +1,7 @@
+import logging
+import os
+import sys
+
 import numpy as np
 import scipy as sp
 from scipy import integrate
@@ -5,6 +9,7 @@ from scipy.optimize import minimize_scalar
 from scipy.stats import linregress
 
 np.warnings.filterwarnings("ignore")
+logging.basicConfig(filename="derivoproc.out", level=logging.INFO, format='', filemode='w')
 
 SUGGEST_COUNT = 3
 R = 8.3144598
@@ -112,12 +117,17 @@ def calc_init_energy(t_vec, alpha_vec):
     :param alpha_vec: alpha vector
     :return: value of E_act
     """
+    logging.info("Calculation initial Eact...")
     x = 1 / t_vec
-    y = np.log(alpha_vec / (T ** 2))
+    y = np.log(alpha_vec / (t_vec ** 2))
 
     dy = np.diff(y) / np.diff(x)
     target = (np.abs(dy - np.average(dy))).argmin()
-    return linregress(x[:target], y[:target])[0] * (-R)
+    logging.info("  Using %d of %d points for calculating", target, len(t_vec))
+    regress = linregress(x[:target], y[:target])
+    e_init = regress[0] * (-R)
+    logging.info("  Initial energy is %.2f J, R-squared is %.4f", e_init, regress[2] ** 2)
+    return e_init
 
 
 def find_best_alg(act_energy, temp_array, alpha_array):
@@ -128,11 +138,19 @@ def find_best_alg(act_energy, temp_array, alpha_array):
     :param alpha_array: alpha array
     :return: [algorithm_numbers]
     """
+    logging.info("Finding best algorithms...")
+    logging.info("  ----------------")
     summary = np.array([])
     for alg_n in range(len(G)):
+        logging.info("  Trying: %s", g_as_str(alg_n))
         f = calc_f(alg_n, alpha_array)
-        summary = np.append(summary, calc_delta(act_energy, temp_array, f))
-    return np.argsort(summary)[:SUGGEST_COUNT]
+        delta = calc_delta(act_energy, temp_array, f)
+        logging.info("  Delta is %.5f", delta)
+        logging.info("  ----------------")
+        summary = np.append(summary, delta)
+    best = np.argsort(summary)[:SUGGEST_COUNT]
+    logging.info("Best algorithms are: %s", ', '.join([g_as_str(x) for x in best]))
+    return best
 
 
 def optimize_energy(temp_arr, f_arr):
@@ -143,33 +161,45 @@ def optimize_energy(temp_arr, f_arr):
     :return: [optimized energy, delta]
     """
     opt = minimize_scalar(calc_delta, args=(temp_arr, f_arr,))
+    logging.info("  Done in %d itetations", opt.nit)
+    logging.info("  Delta is %.5f", opt.fun)
+    logging.info("  Eact is %.2f J", opt.x)
     return [opt.x, opt.fun]
 
 
-def extract_data(filename):
-    """
-    Extract two arrays from .csv: T and alpha
+def process_file(filename):
+    logging.info("Reading content...")
+    content = np.genfromtxt(filename, delimiter=";", skip_header=1)
+    t = content[:, 0]
+    a = content[:, 1]
 
-    :param filename: name of .csv file
-    :return: np.array, 1st col - T, 2nd col - alpha
-    """
-    data = np.genfromtxt(filename, delimiter=";", skip_header=1)
-    return data
+    energy = calc_init_energy(t, a)
+    best = find_best_alg(energy, t, a)
+    for i in best:
+        logging.info("  ------------------------------")
+        logging.info("  Optimizing \'%s\' algorithm...", g_as_str(i))
+        f = calc_f(i, a)
+        res = optimize_energy(t, f)
+        logging.info("  ------------------------------")
 
 
 """
 MAIN
 """
-content = extract_data("UPd3_653-837K.csv")
-T = content[:, 0]
-a = content[:, 1]
+logging.info("===============RUNNING SCRIPT===============")
 
-E = calc_init_energy(T, a)
-best = find_best_alg(E, T, a)
-print("Algo\tEact\tdelta")
-for i in best:
-    F = calc_f(i, a)
-    res = optimize_energy(T, F)
-    print(g_as_str(i), '\t', res[0], '\t', res[1])
-
+if len(sys.argv) == 1:
+    logging.info("No arguments, checking directory for .csv files...")
+    for file in os.listdir():
+        if file.endswith(".csv"):
+            logging.info("===PROCESSING FILE===: %s", file)
+            process_file(file)
+            logging.info("==========DONE!==========")
+if len(sys.argv) > 1:
+    logging.info("Processing files from arguments...")
+    for arg in sys.argv[1:]:
+        logging.info("===PROCESSING FILE===: %s", arg)
+        process_file(arg)
+        logging.info("==========DONE!==========")
+logging.info("================SHUTTING DOWN===============")
 # End of script
